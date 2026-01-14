@@ -26,9 +26,10 @@ export default function App() {
   const [weather, setWeather] = useState(null);
   const [loadingWeather, setLoadingWeather] = useState(false);
   const [showWeather, setShowWeather] = useState(false);
+  const [locationName, setLocationName] = useState(null);
 
   /* ---------------------------------------------------
-     🌦️ FETCH WEATHER ON APP OPEN (BACKGROUND)
+     🌦️ FETCH WEATHER + LOCATION ON APP OPEN (BACKGROUND)
   --------------------------------------------------- */
   useEffect(() => {
     (async () => {
@@ -42,14 +43,31 @@ export default function App() {
           accuracy: Location.Accuracy.Balanced,
         });
 
-        const data = await get14DayForecast(
-          loc.coords.latitude,
-          loc.coords.longitude
-        );
+        const { latitude, longitude } = loc.coords;
 
+        // 📍 Reverse geocode for human-readable location
+        const places = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
+
+        if (places && places.length > 0) {
+          const p = places[0];
+          const readable = [
+            p.city || p.subregion || p.district,
+            p.region,
+          ]
+            .filter(Boolean)
+            .join(", ");
+
+          setLocationName(readable);
+        }
+
+        // 🌦️ Fetch weather
+        const data = await get14DayForecast(latitude, longitude);
         setWeather(data);
       } catch (err) {
-        console.log("Weather fetch failed:", err);
+        console.log("Weather/location fetch failed:", err);
       } finally {
         setLoadingWeather(false);
       }
@@ -188,10 +206,16 @@ export default function App() {
         </Text>
       ))}
 
-      {/* 🌦️ WEATHER SECTION (SHOWN ONLY AFTER DETECTION) */}
+      {/* 🌦️ WEATHER SECTION */}
       {showWeather && (
         <>
-          <Text style={styles.sectionTitle}>14-Day Weather Forecast</Text>
+          {locationName && (
+            <Text style={styles.locationText}>
+              📍 Location: {locationName}
+            </Text>
+          )}
+
+          <Text style={styles.sectionTitle}>Weather Forecast</Text>
 
           {loadingWeather && <ActivityIndicator />}
 
@@ -228,6 +252,12 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 18,
     fontWeight: "600",
+  },
+  locationText: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#065f46",
   },
   buttonsRow: {
     flexDirection: "row",
