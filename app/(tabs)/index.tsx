@@ -8,6 +8,7 @@ import {
   Alert,
   ScrollView,
   TouchableOpacity,
+  Modal,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -15,56 +16,75 @@ import { get14DayForecast } from "../../services/weather";
 
 const BACKEND_URL = "http://192.168.1.8:8000";
 
+const CROPS = ["Select Crop", "Jowar", "Toor dal", "Urad dal", "Cotton"];
+
 export default function HomeScreen() {
+  const [selectedCrop, setSelectedCrop] = useState("Select Crop");
+  const [showCropModal, setShowCropModal] = useState(false);
+
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [annotatedB64, setAnnotatedB64] = useState<string | null>(null);
   const [detections, setDetections] = useState<any[]>([]);
   const [uploading, setUploading] = useState(false);
 
+  const [adviceMap, setAdviceMap] = useState<Record<string, string>>({});
   const [weather, setWeather] = useState<any>(null);
   const [showWeather, setShowWeather] = useState(false);
   const [locationName, setLocationName] = useState<string | null>(null);
 
   /* ---------------------------------------
-     Permissions + Weather + Location
+     Location + Weather (on app open)
   --------------------------------------- */
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
 
-      const loc = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = loc.coords;
+        const loc = await Location.getCurrentPositionAsync({});
+        const { latitude, longitude } = loc.coords;
 
-      // Reverse geocode → readable location
-      const places = await Location.reverseGeocodeAsync({
-        latitude,
-        longitude,
-      });
+        const places = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
 
-      if (places.length > 0) {
-        const p = places[0];
-        const readable = [p.city || p.district, p.region]
-          .filter(Boolean)
-          .join(", ");
-        setLocationName(readable);
+        if (places.length > 0) {
+          const p = places[0];
+          setLocationName(
+            [p.city || p.district, p.region].filter(Boolean).join(", ")
+          );
+        }
+
+        const data = await get14DayForecast(latitude, longitude);
+        setWeather(data);
+      } catch (err) {
+        console.log("Weather/location error:", err);
       }
-
-      const data = await get14DayForecast(latitude, longitude);
-      setWeather(data);
     })();
   }, []);
 
-  /* ---------------------------------------
-     Pick Image / Camera
-  --------------------------------------- */
   const resetState = () => {
     setAnnotatedB64(null);
     setDetections([]);
+    setAdviceMap({});
     setShowWeather(false);
   };
 
+  /* ---------------------------------------
+     Image actions
+  --------------------------------------- */
+  const requireCrop = () => {
+    if (selectedCrop === "Select Crop") {
+      Alert.alert("Select Crop", "Please select crop first");
+      return false;
+    }
+    return true;
+  };
+
   const pickImage = async () => {
+    if (!requireCrop()) return;
+
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.9,
@@ -77,6 +97,8 @@ export default function HomeScreen() {
   };
 
   const takePhoto = async () => {
+    if (!requireCrop()) return;
+
     const res = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.9,
@@ -92,10 +114,7 @@ export default function HomeScreen() {
      Upload & Predict
   --------------------------------------- */
   const uploadAndPredict = async () => {
-    if (!imageUri) {
-      Alert.alert("Photo required", "Please take or select a crop photo.");
-      return;
-    }
+    if (!imageUri) return;
 
     setUploading(true);
 
@@ -123,6 +142,8 @@ export default function HomeScreen() {
       setAnnotatedB64(j.annotated_image_base64 || null);
       setDetections(j.detections || []);
       setShowWeather(true);
+
+      await fetchTreatmentAdvice(j.detections || []);
     } catch (err) {
       Alert.alert("Error", String(err));
     } finally {
@@ -131,7 +152,7 @@ export default function HomeScreen() {
   };
 
   /* ---------------------------------------
-     Unique detections (highest confidence)
+     Unique detections
   --------------------------------------- */
   const uniqueDetections = useMemo(() => {
     const map: Record<string, any> = {};
@@ -143,15 +164,59 @@ export default function HomeScreen() {
     return Object.values(map);
   }, [detections]);
 
+  const fetchTreatmentAdvice = async (dets: any[]) => {
+    const out: Record<string, string> = {};
+    for (const d of dets) {
+      try {
+        const r = await fetch(
+          `${BACKEND_URL}/treatment-advice?crop=${selectedCrop}&label=${d.label}`
+        );
+        const j = await r.json();
+        out[d.label] = j.advice;
+      } catch {}
+    }
+    setAdviceMap(out);
+  };
+
   /* ---------------------------------------
      UI
   --------------------------------------- */
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>🌾 Agritech Crop Doctor</Text>
-      <Text style={styles.subtitle}>AI-powered crop health check</Text>
 
-      {/* ACTION BUTTONS */}
+      {/* CROP DROPDOWN */}
+      <TouchableOpacity
+        style={styles.dropdown}
+        onPress={() => setShowCropModal(true)}
+      >
+        <Text style={styles.dropdownText}>{selectedCrop}</Text>
+      </TouchableOpacity>
+
+      {/* DROPDOWN MODAL */}
+      <Modal transparent visible={showCropModal} animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          onPress={() => setShowCropModal(false)}
+        >
+          <View style={styles.modalBox}>
+            {CROPS.map((c) => (
+              <TouchableOpacity
+                key={c}
+                style={styles.modalItem}
+                onPress={() => {
+                  setSelectedCrop(c);
+                  setShowCropModal(false);
+                }}
+              >
+                <Text style={styles.modalText}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ACTIONS */}
       <View style={styles.actionRow}>
         <TouchableOpacity style={styles.primaryBtn} onPress={takePhoto}>
           <Text style={styles.btnText}>📷 Take Photo</Text>
@@ -161,42 +226,31 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* IMAGE PREVIEW */}
-      {imageUri ? (
-        <Image source={{ uri: imageUri }} style={styles.preview} />
-      ) : (
-        <View style={[styles.preview, styles.placeholder]}>
-          <Text style={{ color: "#777" }}>No crop image selected</Text>
-        </View>
-      )}
+      {/* IMAGE */}
+      {imageUri && <Image source={{ uri: imageUri }} style={styles.preview} />}
 
-      {/* ANALYZE */}
-      <TouchableOpacity
-        style={[styles.analyzeBtn, uploading && { opacity: 0.6 }]}
-        onPress={uploadAndPredict}
-        disabled={uploading}
-      >
+      <TouchableOpacity style={styles.analyzeBtn} onPress={uploadAndPredict}>
         <Text style={styles.analyzeText}>
-          {uploading ? "🔍 Analyzing..." : "🌱 Check Crop Health"}
+          {uploading ? "Analyzing..." : "🌱 Check Crop Health"}
         </Text>
       </TouchableOpacity>
 
-      {uploading && <ActivityIndicator size="large" style={{ marginTop: 12 }} />}
+      {uploading && <ActivityIndicator style={{ marginTop: 12 }} />}
 
-      {/* AI DIAGNOSIS */}
-      {uniqueDetections.length > 0 && (
-        <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>🧠 AI Diagnosis</Text>
-          {uniqueDetections.map((d, i) => (
-            <View key={i} style={{ marginTop: 6 }}>
-              <Text style={styles.issueText}>⚠️ {d.label}</Text>
-              <Text style={styles.confText}>
-                Confidence: {(d.score * 100).toFixed(0)}%
-              </Text>
+      {/* RESULTS */}
+      {uniqueDetections.map((d, i) => (
+        <View key={i} style={styles.resultCard}>
+          <Text style={styles.issueText}>⚠️ {d.label}</Text>
+          <Text>Confidence: {(d.score * 100).toFixed(0)}%</Text>
+
+          {adviceMap[d.label] && (
+            <View style={styles.adviceBox}>
+              <Text style={styles.adviceTitle}>🧑‍🌾 Treatment Advice</Text>
+              <Text>{adviceMap[d.label]}</Text>
             </View>
-          ))}
+          )}
         </View>
-      )}
+      ))}
 
       {/* ANNOTATED IMAGE */}
       {annotatedB64 && (
@@ -209,39 +263,27 @@ export default function HomeScreen() {
       {/* WEATHER */}
       {showWeather && weather?.forecast?.forecastday && (
         <>
-          {locationName && (
-            <Text style={styles.locationText}>📍 Location: {locationName}</Text>
-          )}
-
-          <Text style={styles.sectionTitle}>
+          <Text style={styles.weatherTitle}>
             🌦️ Weather Forecast ({weather.forecast.forecastday.length} days)
           </Text>
 
+          {locationName && (
+            <Text style={styles.locationText}>📍 {locationName}</Text>
+          )}
+
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {weather.forecast.forecastday.map((day: any, i: number) => (
+            {weather.forecast.forecastday.map((d: any, i: number) => (
               <View key={i} style={styles.weatherCard}>
-                <Text style={styles.weatherDate}>{day.date}</Text>
-                <Text>
-                  🌡 {day.day.maxtemp_c}° / {day.day.mintemp_c}°
-                </Text>
-                <Text>🌧 {day.day.daily_chance_of_rain}% rain</Text>
+                <Text style={styles.weatherDate}>{d.date}</Text>
+                <Text>🌡 {d.day.maxtemp_c}° / {d.day.mintemp_c}°</Text>
+                <Text>🌧 {d.day.daily_chance_of_rain}% rain</Text>
                 <Text style={styles.weatherCond}>
-                  {day.day.condition.text}
+                  {d.day.condition.text}
                 </Text>
               </View>
             ))}
           </ScrollView>
         </>
-      )}
-
-      {/* ADVICE */}
-      {showWeather && (
-        <View style={styles.adviceBox}>
-          <Text style={styles.adviceTitle}>🧑‍🌾 Recommended Action</Text>
-          <Text>• Avoid spraying before rain</Text>
-          <Text>• Monitor crop for next 2–3 days</Text>
-          <Text>• Early action prevents yield loss</Text>
-        </View>
       )}
     </ScrollView>
   );
@@ -251,111 +293,90 @@ export default function HomeScreen() {
    Styles
 --------------------------------------- */
 const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: "#fff",
-  },
+  container: { padding: 16, backgroundColor: "#fff" },
+
   title: {
     fontSize: 24,
     fontWeight: "800",
     textAlign: "center",
+    marginBottom: 12,
   },
-  subtitle: {
-    textAlign: "center",
-    color: "#555",
-    marginBottom: 16,
+
+  dropdown: {
+    borderWidth: 1,
+    borderColor: "#16a34a",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 12,
   },
-  actionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  dropdownText: { fontWeight: "700" },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    justifyContent: "center",
+    alignItems: "center",
   },
+  modalBox: {
+    backgroundColor: "#fff",
+    width: "80%",
+    borderRadius: 12,
+    padding: 8,
+  },
+  modalItem: { padding: 12 },
+  modalText: { fontWeight: "600" },
+
+  actionRow: { flexDirection: "row", marginBottom: 8 },
   primaryBtn: {
     flex: 1,
     backgroundColor: "#16a34a",
-    padding: 14,
-    borderRadius: 12,
-    marginHorizontal: 6,
+    padding: 12,
+    borderRadius: 10,
+    marginHorizontal: 4,
   },
-  btnText: {
-    color: "#fff",
-    textAlign: "center",
-    fontWeight: "700",
-  },
+  btnText: { color: "#fff", textAlign: "center", fontWeight: "700" },
+
   preview: {
     width: "100%",
-    height: 260,
-    borderRadius: 14,
-    marginTop: 14,
+    height: 240,
+    borderRadius: 12,
+    marginTop: 12,
     backgroundColor: "#eee",
   },
-  placeholder: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
+
   analyzeBtn: {
-    marginTop: 16,
     backgroundColor: "#2563eb",
-    padding: 16,
-    borderRadius: 14,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 12,
   },
-  analyzeText: {
-    color: "#fff",
-    textAlign: "center",
-    fontSize: 18,
-    fontWeight: "700",
-  },
+  analyzeText: { color: "#fff", textAlign: "center", fontWeight: "700" },
+
   resultCard: {
-    marginTop: 20,
+    marginTop: 16,
     backgroundColor: "#fef3c7",
-    padding: 14,
-    borderRadius: 12,
-  },
-  resultTitle: {
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  issueText: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#92400e",
-  },
-  confText: {
-    color: "#78350f",
-  },
-  sectionTitle: {
-    marginTop: 22,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  locationText: {
-    marginTop: 12,
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#065f46",
-  },
-  weatherCard: {
-    marginTop: 12,
-    marginRight: 10,
     padding: 12,
-    width: 150,
     borderRadius: 12,
-    backgroundColor: "#f1f5f9",
   },
-  weatherDate: {
-    fontWeight: "700",
-  },
-  weatherCond: {
-    marginTop: 4,
-    fontSize: 12,
-  },
+  issueText: { fontSize: 18, fontWeight: "700", color: "#92400e" },
+
   adviceBox: {
-    marginTop: 20,
+    marginTop: 8,
     backgroundColor: "#ecfeff",
-    padding: 14,
-    borderRadius: 12,
+    padding: 10,
+    borderRadius: 8,
   },
-  adviceTitle: {
-    fontWeight: "700",
-    marginBottom: 6,
+  adviceTitle: { fontWeight: "700", marginBottom: 4 },
+
+  weatherTitle: { marginTop: 20, fontSize: 20, fontWeight: "800" },
+  locationText: { marginBottom: 6, fontWeight: "600", color: "#065f46" },
+  weatherCard: {
+    padding: 10,
+    backgroundColor: "#f1f5f9",
+    margin: 6,
+    borderRadius: 8,
+    width: 160,
   },
+  weatherDate: { fontWeight: "700" },
+  weatherCond: { fontSize: 12, marginTop: 4 },
 });
