@@ -12,9 +12,12 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
+import * as Speech from "expo-speech";
 import { get14DayForecast } from "../../services/weather";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-const BACKEND_URL = "http://192.168.1.8:8000";
+//const BACKEND_URL = "http://192.168.1.8:8000";
+const BACKEND_URL = "http://10.180.227.185:8000";
 
 const CROPS = ["Select Crop", "Jowar", "Toor dal", "Urad dal", "Cotton"];
 
@@ -44,11 +47,7 @@ export default function HomeScreen() {
         const loc = await Location.getCurrentPositionAsync({});
         const { latitude, longitude } = loc.coords;
 
-        const places = await Location.reverseGeocodeAsync({
-          latitude,
-          longitude,
-        });
-
+        const places = await Location.reverseGeocodeAsync({ latitude, longitude });
         if (places.length > 0) {
           const p = places[0];
           setLocationName(
@@ -117,25 +116,18 @@ export default function HomeScreen() {
     if (!imageUri) return;
 
     setUploading(true);
-
     try {
       const name = imageUri.split("/").pop() || "photo.jpg";
       const ext = name.split(".").pop()?.toLowerCase();
       const mime = ext === "png" ? "image/png" : "image/jpeg";
 
       const formData = new FormData();
-      formData.append("file", {
-        uri: imageUri,
-        name,
-        type: mime,
-      } as any);
+      formData.append("file", { uri: imageUri, name, type: mime } as any);
 
       const r = await fetch(`${BACKEND_URL}/predict?score_thresh=0.25`, {
         method: "POST",
         body: formData,
       });
-
-      if (!r.ok) throw new Error(await r.text());
 
       const j = await r.json();
 
@@ -179,113 +171,151 @@ export default function HomeScreen() {
   };
 
   /* ---------------------------------------
+     🔊 TEXT TO SPEECH
+  --------------------------------------- */
+  const speakResults = () => {
+    Speech.stop();
+
+    let message = `Crop selected is ${selectedCrop}. `;
+
+    if (uniqueDetections.length === 0) {
+      message += "No major disease detected. Crop looks healthy. ";
+    } else {
+      uniqueDetections.forEach((d) => {
+        message += `Issue detected: ${d.label}. Confidence ${(d.score * 100).toFixed(
+          0
+        )} percent. `;
+        if (adviceMap[d.label]) {
+          message += `Treatment advice: ${adviceMap[d.label]}. `;
+        }
+      });
+    }
+
+    if (weather?.forecast?.forecastday?.length) {
+      const today = weather.forecast.forecastday[0];
+      message += `Weather update. Maximum temperature ${today.day.maxtemp_c} degrees. `;
+      message += `Minimum temperature ${today.day.mintemp_c} degrees. `;
+      if (today.day.daily_chance_of_rain > 40) {
+        message += "Rain is likely. Avoid spraying pesticides. ";
+      }
+    }
+
+    Speech.speak(message, { language: "en-IN", rate: 0.85 });
+  };
+
+  /* ---------------------------------------
      UI
   --------------------------------------- */
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>🌾 Agritech Crop Doctor</Text>
+    <SafeAreaView style={{ flex: 1 }}>
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.title}>🌾 Agri Dhanvantari</Text>
 
-      {/* CROP DROPDOWN */}
-      <TouchableOpacity
-        style={styles.dropdown}
-        onPress={() => setShowCropModal(true)}
-      >
-        <Text style={styles.dropdownText}>{selectedCrop}</Text>
-      </TouchableOpacity>
-
-      {/* DROPDOWN MODAL */}
-      <Modal transparent visible={showCropModal} animationType="fade">
+        {/* Crop Dropdown */}
         <TouchableOpacity
-          style={styles.modalOverlay}
-          onPress={() => setShowCropModal(false)}
+          style={styles.dropdown}
+          onPress={() => setShowCropModal(true)}
         >
-          <View style={styles.modalBox}>
-            {CROPS.map((c) => (
-              <TouchableOpacity
-                key={c}
-                style={styles.modalItem}
-                onPress={() => {
-                  setSelectedCrop(c);
-                  setShowCropModal(false);
-                }}
-              >
-                <Text style={styles.modalText}>{c}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={styles.dropdownText}>{selectedCrop}</Text>
         </TouchableOpacity>
-      </Modal>
 
-      {/* ACTIONS */}
-      <View style={styles.actionRow}>
-        <TouchableOpacity style={styles.primaryBtn} onPress={takePhoto}>
-          <Text style={styles.btnText}>📷 Take Photo</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.primaryBtn} onPress={pickImage}>
-          <Text style={styles.btnText}>🖼️ Gallery</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* IMAGE */}
-      {imageUri && <Image source={{ uri: imageUri }} style={styles.preview} />}
-
-      <TouchableOpacity style={styles.analyzeBtn} onPress={uploadAndPredict}>
-        <Text style={styles.analyzeText}>
-          {uploading ? "Analyzing..." : "🌱 Check Crop Health"}
-        </Text>
-      </TouchableOpacity>
-
-      {uploading && <ActivityIndicator style={{ marginTop: 12 }} />}
-
-      {/* RESULTS */}
-      {uniqueDetections.map((d, i) => (
-        <View key={i} style={styles.resultCard}>
-          <Text style={styles.issueText}>⚠️ {d.label}</Text>
-          <Text>Confidence: {(d.score * 100).toFixed(0)}%</Text>
-
-          {adviceMap[d.label] && (
-            <View style={styles.adviceBox}>
-              <Text style={styles.adviceTitle}>🧑‍🌾 Treatment Advice</Text>
-              <Text>{adviceMap[d.label]}</Text>
+        <Modal transparent visible={showCropModal} animationType="fade">
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            onPress={() => setShowCropModal(false)}
+          >
+            <View style={styles.modalBox}>
+              {CROPS.map((c) => (
+                <TouchableOpacity
+                  key={c}
+                  style={styles.modalItem}
+                  onPress={() => {
+                    setSelectedCrop(c);
+                    setShowCropModal(false);
+                  }}
+                >
+                  <Text style={styles.modalText}>{c}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-          )}
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Actions */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.primaryBtn} onPress={takePhoto}>
+            <Text style={styles.btnText}>📷 Take Photo</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.primaryBtn} onPress={pickImage}>
+            <Text style={styles.btnText}>🖼️ Gallery</Text>
+          </TouchableOpacity>
         </View>
-      ))}
 
-      {/* ANNOTATED IMAGE */}
-      {annotatedB64 && (
-        <Image
-          source={{ uri: `data:image/png;base64,${annotatedB64}` }}
-          style={styles.preview}
-        />
-      )}
+        {imageUri && <Image source={{ uri: imageUri }} style={styles.preview} />}
 
-      {/* WEATHER */}
-      {showWeather && weather?.forecast?.forecastday && (
-        <>
-          <Text style={styles.weatherTitle}>
-            🌦️ Weather Forecast ({weather.forecast.forecastday.length} days)
+        <TouchableOpacity style={styles.analyzeBtn} onPress={uploadAndPredict}>
+          <Text style={styles.analyzeText}>
+            {uploading ? "Analyzing..." : "🌱 Check Crop Health"}
           </Text>
+        </TouchableOpacity>
 
-          {locationName && (
-            <Text style={styles.locationText}>📍 {locationName}</Text>
-          )}
+        {uploading && <ActivityIndicator style={{ marginTop: 12 }} />}
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {weather.forecast.forecastday.map((d: any, i: number) => (
-              <View key={i} style={styles.weatherCard}>
-                <Text style={styles.weatherDate}>{d.date}</Text>
-                <Text>🌡 {d.day.maxtemp_c}° / {d.day.mintemp_c}°</Text>
-                <Text>🌧 {d.day.daily_chance_of_rain}% rain</Text>
-                <Text style={styles.weatherCond}>
-                  {d.day.condition.text}
-                </Text>
+        {/* Results */}
+        {uniqueDetections.map((d, i) => (
+          <View key={i} style={styles.resultCard}>
+            <Text style={styles.issueText}>⚠️ {d.label}</Text>
+            <Text>Confidence: {(d.score * 100).toFixed(0)}%</Text>
+
+            {adviceMap[d.label] && (
+              <View style={styles.adviceBox}>
+                <Text style={styles.adviceTitle}>🧑‍🌾 Treatment Advice</Text>
+                <Text>{adviceMap[d.label]}</Text>
               </View>
-            ))}
-          </ScrollView>
-        </>
-      )}
-    </ScrollView>
+            )}
+          </View>
+        ))}
+
+        {/* Annotated Image */}
+        {annotatedB64 && (
+          <Image
+            source={{ uri: `data:image/png;base64,${annotatedB64}` }}
+            style={styles.preview}
+          />
+        )}
+
+        {/* Weather */}
+        {showWeather && weather?.forecast?.forecastday && (
+          <>
+            <Text style={styles.weatherTitle}>
+              🌦️ Weather Forecast ({weather.forecast.forecastday.length} days)
+            </Text>
+
+            {locationName && (
+              <Text style={styles.locationText}>📍 {locationName}</Text>
+            )}
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {weather.forecast.forecastday.map((d: any, i: number) => (
+                <View key={i} style={styles.weatherCard}>
+                  <Text style={styles.weatherDate}>{d.date}</Text>
+                  <Text>🌡 {d.day.maxtemp_c}° / {d.day.mintemp_c}°</Text>
+                  <Text>🌧 {d.day.daily_chance_of_rain}% rain</Text>
+                  <Text style={styles.weatherCond}>{d.day.condition.text}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </>
+        )}
+
+        {/* 🔊 Read Results */}
+        {uniqueDetections.length > 0 && (
+          <TouchableOpacity style={styles.speakBtn} onPress={speakResults}>
+            <Text style={styles.speakText}>🔊 Read Results</Text>
+          </TouchableOpacity>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -293,7 +323,11 @@ export default function HomeScreen() {
    Styles
 --------------------------------------- */
 const styles = StyleSheet.create({
-  container: { padding: 16, backgroundColor: "#fff" },
+  container: {
+    padding: 16,
+    paddingTop: 12, // ✅ KEY FIX: pushes content below notch
+    backgroundColor: "#fff",
+  },
 
   title: {
     fontSize: 24,
@@ -317,12 +351,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  modalBox: {
-    backgroundColor: "#fff",
-    width: "80%",
-    borderRadius: 12,
-    padding: 8,
-  },
+  modalBox: { backgroundColor: "#fff", width: "80%", borderRadius: 12 },
   modalItem: { padding: 12 },
   modalText: { fontWeight: "600" },
 
@@ -370,6 +399,7 @@ const styles = StyleSheet.create({
 
   weatherTitle: { marginTop: 20, fontSize: 20, fontWeight: "800" },
   locationText: { marginBottom: 6, fontWeight: "600", color: "#065f46" },
+
   weatherCard: {
     padding: 10,
     backgroundColor: "#f1f5f9",
@@ -379,4 +409,12 @@ const styles = StyleSheet.create({
   },
   weatherDate: { fontWeight: "700" },
   weatherCond: { fontSize: 12, marginTop: 4 },
+
+  speakBtn: {
+    marginTop: 16,
+    backgroundColor: "#0f766e",
+    padding: 14,
+    borderRadius: 12,
+  },
+  speakText: { color: "#fff", textAlign: "center", fontWeight: "700" },
 });
